@@ -1,6 +1,8 @@
 library(dplyr)
 library(futile.logger)
 library(data.table)
+library(testthat)
+library(peakRAM)
 source("src/utils/inputs.R")
 source("src/utils/ventas.R")
 source("src/utils/configs.R")
@@ -9,7 +11,9 @@ source("src/utils/pdvs.R")
 
 pais <- 'br'
 
-fuentes <- c('dia_semana_hora', 'mapa', 'totales', 'penetracao')
+#fuentes <- c('dia_semana_hora', 'mapa', 'totales', 'penetracao')
+fuentes <- c('mapa')
+
 path_generico <- '../%s/src/%s.R'
 
 correr_fuentes <- function(ventas, proveedor_objetivo, particiones_pdvs, particiones_productos, id_conf, geo, canal, mes){
@@ -24,15 +28,44 @@ correr_fuentes <- function(ventas, proveedor_objetivo, particiones_pdvs, partici
     source(script_cargar)
     #procesar ventas
     flog.info("Ejecutando %s", fuente)
-    resultado <- get(fuente)(ventas, proveedor_objetivo, particiones_pdvs, particiones_productos)
-    fwrite(resultado, sprintf("%s/%s_%s_%s.csv", dir_salida, fuente, geo_normalizado, canal_normalizado))
+    #print(names(ventas))
+    
+    cols_ventas_antes <- colnames(ventas)
+    cols_ventas_antes <- c(cols_ventas_antes, NULL)
+    
+    ventas_original <- copy(ventas)
+    
+    memoria <- peakRAM(
+      resultado <- get(fuente)(ventas, proveedor_objetivo, particiones_pdvs, particiones_productos)
+    )
+    
+    memoria$fuente <- fuente
+    memoria$geo <- geo
+    memoria$canal <- canal
+    memoria$proveedor <- proveedor_objetivo
+    
+    
+    fwrite(memoria, sprintf("%s/%s_%s_%s_memoria.csv", dir_salida, fuente, geo_normalizado, canal_normalizado))
+    
+    ventas <- ventas_original
+    rm(ventas_original)
+    
+    cols_ventas_desp <- names(ventas)
+    expect_equal(cols_ventas_antes, cols_ventas_desp)
+    
+    ruta_salida <- sprintf("%s/%s_%s_%s.csv", dir_salida, fuente, geo_normalizado, canal_normalizado)
+    flog.info(paste("Escribiendo en", ruta_salida))
+    fwrite(resultado, ruta_salida)
+    
+    rm(ventas)
   })
 }
 
 
 fechas <- NA
 mes <- 202202
-config_pais <- obtener_configuracion("br")
+config_pais <- obtener_configuracion("br") %>% slice(1)
+#config_pais <- obtener_configuracion("br") 
 lista_empresas <- unique(config_pais$pemp_codigo)
 
 pdvs_totales <- lapply(lista_empresas, function(p){
@@ -41,12 +74,17 @@ pdvs_totales <- lapply(lista_empresas, function(p){
   rbindlist() %>% 
   unique()
 
+#pdvs_totales <- pdvs_totales %>% filter(geo=="PARANA" & canal=="10+")
+
 lista_pdvs_totales <- pdvs_totales %>%
   group_split(across(c("geo", "canal")))
+
+lista_pdvs_totales <- lista_pdvs_totales[1:4]
 
 lapply(lista_pdvs_totales, function(p){
   geo <- p$geo[1]
   canal <- p$canal[1]
+  
   flog.info("Extrayendo ventas para %s, %s", geo, canal)
   ventas <- obtener_ventas(pais, fechas, pdvs=pull(p, pdv_codigo))
   flog.info("Ventas extraidas para %s, %s", geo, canal)
@@ -76,14 +114,14 @@ lapply(lista_pdvs_totales, function(p){
     
     flog.info("Corriendo fuentes para %s, %s, %s", config$id, geo, canal)
     correr_fuentes(
-      ventas_emp, proveedor_objetivo, particiones_pdvs_limpio, particiones_productos_limpio, config$id, geo, canal, mes)
+      ventas_emp, proveedor_objetivo, particiones_pdvs_limpio, particiones_productos_limpio, config$id, geo, canal, mes
+      )
   })
   gc()
+  
 })
 
-
-
-
+fread("")
 
 
 
